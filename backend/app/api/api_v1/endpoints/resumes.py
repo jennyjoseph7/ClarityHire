@@ -89,7 +89,7 @@ async def get_my_latest_resume(
     result = await db.execute(
         select(Resume)
         .where(Resume.user_id == current_user.id, Resume.status == ResumeStatus.PARSED)
-        .order_by(desc(Resume.id))
+        .order_by(desc(Resume.created_at))
         .limit(1)
     )
     resume = result.scalars().first()
