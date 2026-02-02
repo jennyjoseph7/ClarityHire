@@ -241,7 +241,7 @@ def extract_year(date_str: str) -> int:
     return int(match.group()) if match else 0
 
 
-# ====== STAGE 2: Local Enrichment ======
+# ====== LOCAL ENRICHMENT ======
 def enrich_resume_data(raw_data: dict, original_text: str) -> dict:
     """Transform simple extraction into detailed structure needed for matching"""
     
@@ -264,71 +264,100 @@ def enrich_resume_data(raw_data: dict, original_text: str) -> dict:
         "additional_info": {}
     }
     
-    # Build evidence map from projects, experience, certifications
-    evidence_map = {}  # skill -> [list of evidence]
+    # Build evidence map
+    evidence_map = {}
     
-    # Extract from projects
+    # From projects
     for project in raw_data.get("projects", []):
         if not isinstance(project, dict):
             continue
-        project_name = project.get("title", "Unknown Project")
+        project_name = project.get("title", "Project")
         techs = project.get("technologies", [])
         if isinstance(techs, list):
             for tech in techs:
+                if not tech:
+                    continue
                 skill = normalize_skill(str(tech))
                 if skill not in evidence_map:
                     evidence_map[skill] = []
                 evidence_map[skill].append(f"project:{project_name}")
     
-    # Extract from experience
+    # From experience
     for exp in raw_data.get("experience", []):
         if not isinstance(exp, dict):
             continue
-        company = exp.get("company", "Unknown Company")
+        company = exp.get("company", "Company")
+        role = exp.get("role", "")
+        
+        # Determine if internship/virtual
+        is_internship = "intern" in role.lower() or "virtual" in company.lower()
+        exp_type = "internship" if is_internship else "work"
+        
         techs = exp.get("technologies", [])
         if isinstance(techs, list):
             for tech in techs:
+                if not tech:
+                    continue
                 skill = normalize_skill(str(tech))
                 if skill not in evidence_map:
                     evidence_map[skill] = []
-                evidence_map[skill].append(f"work:{company}")
+                evidence_map[skill].append(f"{exp_type}:{company}")
     
-    # Extract from certifications
+    # From certifications
     for cert in raw_data.get("certifications", []):
         if not isinstance(cert, dict):
             continue
-        cert_name = cert.get("name", "Unknown Cert")
-        # Infer skills from certification name
-        skills_in_cert = extract_skills_from_text(cert_name)
-        for skill in skills_in_cert:
-            skill = normalize_skill(skill)
-            if skill not in evidence_map:
-                evidence_map[skill] = []
-            evidence_map[skill].append(f"certification:{cert_name}")
+        cert_name = cert.get("name", "Certification")
+        
+        # Check if any skill from main list is in cert name
+        for skill in raw_data.get("skills", []):
+            if skill and skill.lower() in cert_name.lower():
+                norm_skill = normalize_skill(str(skill))
+                if norm_skill not in evidence_map:
+                    evidence_map[norm_skill] = []
+                evidence_map[norm_skill].append(f"certification:{cert_name[:40]}")
     
-    # Build enriched skills array
+    # Collect all unique skills
     all_skills = set()
     
-    # Add explicitly mentioned skills
-    raw_skills = raw_data.get("skills", [])
-    if isinstance(raw_skills, list):
-        for skill in raw_skills:
+    # From explicit skills list
+    for skill in raw_data.get("skills", []):
+        if skill:
             all_skills.add(normalize_skill(str(skill)))
     
-    # Add skills found in evidence
+    # From evidence map
     all_skills.update(evidence_map.keys())
     
-    # Calculate experience months per skill (estimate)
+    # Calculate total experience
     total_exp_months = calculate_total_experience(raw_data.get("experience", []))
     
+    # Build enriched skills with evidence
     for skill in all_skills:
         evidence = evidence_map.get(skill, ["resume:mentioned"])
         
-        # Estimate months based on evidence
-        months = estimate_skill_months(skill, evidence, raw_data)
+        # Estimate months based on usage
+        months = 0
+        
+        # If used in work experience, use that duration
+        for exp in raw_data.get("experience", []):
+            if isinstance(exp, dict):
+                exp_techs = exp.get("technologies", [])
+                if isinstance(exp_techs, list) and skill in [normalize_skill(str(t)) for t in exp_techs if t]:
+                    exp_months = calculate_duration_months(exp.get("start_date", ""), exp.get("end_date", ""))
+                    months = max(months, exp_months)
+        
+        # If used in projects but not work, estimate 3 months
+        if months == 0 and any("project:" in str(e) for e in evidence):
+            months = 3
         
         # Determine proficiency
-        proficiency = determine_proficiency(evidence, months)
+        evidence_count = len(evidence)
+        if months >= 12 and evidence_count >= 3:
+            proficiency = "advanced"
+        elif months >= 6 or evidence_count >= 2:
+            proficiency = "intermediate"
+        else:
+            proficiency = "beginner"
         
         enriched["skills"].append({
             "skill": skill,
@@ -337,191 +366,217 @@ def enrich_resume_data(raw_data: dict, original_text: str) -> dict:
             "proficiency": proficiency
         })
     
+    # Sort skills by evidence count and experience
+    enriched["skills"].sort(
+        key=lambda s: (len(s.get("evidence", [])), s.get("months_experience", 0)), 
+        reverse=True
+    )
+    
     # Transform projects
     for project in raw_data.get("projects", []):
         if not isinstance(project, dict):
             continue
+        
+        techs = project.get("technologies", [])
+        normalized_techs = []
+        if isinstance(techs, list):
+            normalized_techs = [normalize_skill(str(t)) for t in techs if t]
+        
         enriched["projects"].append({
             "title": project.get("title", ""),
             "description": project.get("description", ""),
-            "technologies": [normalize_skill(str(t)) for t in (project.get("technologies") or []) if t],
-            "duration": project.get("duration", ""),
-            "key_achievements": project.get("achievements") or project.get("key_achievements") or [],
+            "technologies": normalized_techs,
+            "duration": str(project.get("duration", "")),
+            "key_achievements": [project.get("description", "")] if project.get("description") else [],
             "url": project.get("url", "")
         })
     
     # Transform experience
+    enriched_experience = []
     for exp in raw_data.get("experience", []):
         if not isinstance(exp, dict):
             continue
-        enriched["experience"].append({
-            "company": exp.get("company", ""),
-            "role": exp.get("role", ""),
-            "type": infer_employment_type(exp),
-            "start_date": exp.get("start_date", ""),
-            "end_date": exp.get("end_date", "Present"),
-            "duration_months": calculate_duration_months(exp.get("start_date", ""), exp.get("end_date", "")),
+        
+        company = exp.get("company", "")
+        role = exp.get("role", "")
+        
+        # Infer type
+        exp_type = "full-time"
+        if "intern" in role.lower():
+            exp_type = "internship"
+        if "virtual" in company.lower() or "virtual" in role.lower():
+            exp_type = "virtual"
+        
+        techs = exp.get("technologies", [])
+        normalized_techs = []
+        if isinstance(techs, list):
+            normalized_techs = [normalize_skill(str(t)) for t in techs if t]
+        
+        duration_months = calculate_duration_months(exp.get("start_date", ""), exp.get("end_date", ""))
+        
+        enriched_experience.append({
+            "company": company,
+            "role": role,
+            "type": exp_type,
+            "start_date": str(exp.get("start_date", "")),
+            "end_date": str(exp.get("end_date", "Present")),
+            "duration_months": duration_months,
             "description": exp.get("description", ""),
-            "key_responsibilities": exp.get("responsibilities") or exp.get("key_responsibilities") or [],
-            "technologies_used": [normalize_skill(str(t)) for t in (exp.get("technologies") or exp.get("technologies_used") or []) if t]
+            "key_responsibilities": [exp.get("description", "")] if exp.get("description") else [],
+            "technologies_used": normalized_techs
         })
+    
+    enriched["experience"] = enriched_experience
     
     # Transform education
     for edu in raw_data.get("education", []):
         if not isinstance(edu, dict):
             continue
+        
+        end_date = edu.get("end_date", "")
+        year = extract_year(end_date) if end_date else 0
+        
         enriched["education"].append({
             "institution": edu.get("institution", ""),
             "degree": edu.get("degree", ""),
-            "field_of_study": edu.get("field") or edu.get("field_of_study") or "",
-            "start_date": edu.get("start_date", ""),
-            "end_date": edu.get("end_date", ""),
-            "year": extract_year(edu.get("end_date") or edu.get("year") or ""),
-            "gpa": edu.get("gpa", ""),
-            "relevant_coursework": edu.get("coursework") or edu.get("relevant_coursework") or []
+            "field_of_study": edu.get("field", ""),
+            "start_date": str(edu.get("start_date", "")),
+            "end_date": str(end_date),
+            "year": year,
+            "gpa": "",
+            "relevant_coursework": []
         })
     
     # Transform certifications
     for cert in raw_data.get("certifications", []):
         if not isinstance(cert, dict):
             continue
+        
         enriched["certifications"].append({
             "name": cert.get("name", ""),
             "issuer": cert.get("issuer", ""),
-            "date": cert.get("date", ""),
-            "technologies": extract_skills_from_text(cert.get("name", ""))
+            "date": str(cert.get("date", "")),
+            "technologies": []
         })
     
-    # Calculate additional info
+    # Determine experience level
+    virtual_count = sum(1 for exp in enriched_experience if exp["type"] in ["internship", "virtual"])
+    total_count = len(enriched_experience)
+    mostly_virtual = virtual_count > total_count / 2 if total_count > 0 else True
+    
+    if total_exp_months < 12 or (mostly_virtual and total_exp_months < 24):
+        exp_level = "fresher"
+    elif total_exp_months < 36:
+        exp_level = "junior"
+    elif total_exp_months < 60:
+        exp_level = "mid"
+    else:
+        exp_level = "senior"
+    
+    # Additional info
     enriched["additional_info"] = {
         "total_experience_months": total_exp_months,
-        "experience_level": determine_experience_level(total_exp_months, enriched["experience"]),
-        "strongest_skills": get_top_skills(enriched["skills"], 5),
+        "experience_level": exp_level,
+        "strongest_skills": [s["skill"] for s in enriched["skills"][:5]],
         "volunteering": raw_data.get("volunteering", []),
-        "languages": raw_data.get("languages", [])
+        "languages": []
     }
+    
+    logger.info(f"Enrichment complete: {len(enriched['skills'])} skills, {len(enriched['projects'])} projects, {len(enriched['experience'])} experiences")
     
     return enriched
 
 
-# ====== LLM-BASED PARSING (Complete Extraction) ======
+# ====== TWO-STAGE PARSING: Simple LLM + Local Enrichment ======
 def parse_with_llm(text: str) -> dict:
-    """Use LLM to extract complete structured data from resume"""
+    """Use LLM to extract basic structured data, then enrich locally"""
     client = Groq(api_key=settings.GROQ_API_KEY)
     
-    prompt = f"""You are an expert Resume Parser. Extract ALL information from this resume and return ONLY valid JSON.
+    # SIMPLE extraction prompt - just get the raw data
+    prompt = f"""Extract information from this resume as JSON.
 
-CRITICAL: Extract the COMPLETE detailed structure below. Do NOT simplify or skip fields.
-
-Return this EXACT JSON structure:
+Return this structure:
 {{
+  "contact": {{
     "name": "full name",
-    "email": "email address",
-    "phone": "phone number",
+    "email": "email",
+    "phone": "phone",
     "linkedin": "linkedin url",
-    "location": "location",
-    "summary": "brief professional summary",
-    
-    "skills": [
-        {{
-            "skill": "canonical skill name (e.g., React not React.js)",
-            "evidence": ["project:ProjectName", "work:CompanyName", "certification:CertName"],
-            "months_experience": 6,
-            "proficiency": "beginner|intermediate|advanced"
-        }}
-    ],
-    
-    "projects": [
-        {{
-            "title": "project title",
-            "description": "what the project does",
-            "technologies": ["React", "Node.js"],
-            "duration": "timeframe or duration",
-            "key_achievements": ["achievement 1"],
-            "url": "github or live url if mentioned"
-        }}
-    ],
-    
-    "experience": [
-        {{
-            "company": "company name",
-            "role": "job title",  
-            "type": "full-time|internship|contract",
-            "start_date": "MMM YYYY",
-            "end_date": "MMM YYYY or Present",
-            "duration_months": 6,
-            "description": "role description",
-            "key_responsibilities": ["responsibility 1"],
-            "technologies_used": ["Python", "AWS"]
-        }}
-    ],
-    
-    "education": [
-        {{
-            "institution": "university name",
-            "degree": "degree name",
-            "field_of_study": "major/field",
-            "start_date": "YYYY",
-            "end_date": "YYYY",
-            "year": 2025,
-            "gpa": "GPA if mentioned",
-            "relevant_coursework": ["course names"]
-        }}
-    ],
-    
-    "certifications": [
-        {{
-            "name": "certification name",
-            "issuer": "issuing organization",
-            "date": "MMM YYYY",
-            "technologies": ["related skills"]
-        }}
-    ],
-    
-    "additional_info": {{
-        "total_experience_months": 12,
-        "experience_level": "fresher|junior|mid|senior",
-        "strongest_skills": ["top 5 skills by evidence"],
-        "volunteering": ["volunteer work"],
-        "languages": ["languages spoken"]
+    "location": "city, state, country"
+  }},
+  "skills": ["Python", "React", "JavaScript"],
+  "projects": [
+    {{
+      "title": "project name",
+      "description": "description",
+      "technologies": ["tech1", "tech2"],
+      "duration": "Dec 2025"
     }}
+  ],
+  "experience": [
+    {{
+      "company": "company name",
+      "role": "job title",
+      "start_date": "Nov 2024",
+      "end_date": "Jan 2025",
+      "description": "what they did",
+      "technologies": ["tech1", "tech2"]
+    }}
+  ],
+  "education": [
+    {{
+      "institution": "university",
+      "degree": "degree name",
+      "field": "field of study",
+      "start_date": "2020",
+      "end_date": "2023"
+    }}
+  ],
+  "certifications": [
+    {{
+      "name": "cert name",
+      "issuer": "issuer",
+      "date": "Nov 2025"
+    }}
+  ],
+  "volunteering": ["volunteer activities"],
+  "summary": "brief summary if present"
 }}
 
-EXTRACTION RULES:
-1. **Skills**: Extract EVERY technology/tool mentioned. For each skill:
-   - Link to WHERE it was used (be specific: "project:MindWell" not just "project")
-   - Estimate months_experience from job durations or default 3-6 for projects
-   - Set proficiency: "advanced" if 12+ months AND multiple uses, "intermediate" if 6+ months OR 2+ uses, else "beginner"
+Extract ALL skills and technologies mentioned anywhere in the resume.
+List ALL projects with their technologies.
+List ALL work experience with technologies used.
 
-2. **Projects**: Extract title, description, ALL technologies used, timeframe
+Resume:
+{text[:15000]}
 
-3. **Experience**: 
-   - Calculate duration_months from dates (e.g., "Jan 2024" to "Jun 2024" = 6 months)
-   - Infer type: "internship" if role/company contains "intern" or "virtual", else "full-time"
-   - Extract ALL technologies mentioned in job description
-
-4. **Calculate additional_info**:
-   - total_experience_months: Sum ALL work experience months
-   - experience_level: "fresher" if <12 months + mostly internships, "junior" if 12-36, "mid" if 36-60, "senior" if 60+
-   - strongest_skills: Top 5 skills with most evidence + highest months_experience
-
-5. **Normalize skill names**: "React.js"→"React", "JS"→"JavaScript", "ML"→"Machine Learning"
-
-Resume Text:
-{text[:20000]}
-
-Return ONLY valid JSON matching the structure above. Be thorough and detailed!
-"""
+Return only JSON, no explanation."""
     
-    completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},
-        timeout=60.0  # 60 second timeout to prevent worker hanging
-    )
-    
-    return json.loads(completion.choices[0].message.content)
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a resume parser. Extract information and return valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=4000,
+            response_format={"type": "json_object"},
+            timeout=60.0
+        )
+        
+        raw_data = json.loads(completion.choices[0].message.content)
+        logger.info(f"LLM extracted skills: {len(raw_data.get('skills', []))}, projects: {len(raw_data.get('projects', []))}")
+        
+        # NOW enrich it locally with all the evidence/proficiency logic
+        enriched = enrich_resume_data(raw_data, text)
+        logger.info(f"After enrichment: {len(enriched.get('skills', []))} skills with evidence")
+        
+        return enriched
+        
+    except Exception as e:
+        logger.error(f"LLM parsing failed: {e}")
+        raise
 
 
 async def parse_resume_async(resume_id: str, file_path: str):
