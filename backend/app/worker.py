@@ -344,9 +344,9 @@ def enrich_resume_data(raw_data: dict, original_text: str) -> dict:
         enriched["projects"].append({
             "title": project.get("title", ""),
             "description": project.get("description", ""),
-            "technologies": [normalize_skill(str(t)) for t in project.get("technologies", []) if t],
+            "technologies": [normalize_skill(str(t)) for t in (project.get("technologies") or []) if t],
             "duration": project.get("duration", ""),
-            "key_achievements": project.get("achievements", project.get("key_achievements", [])),
+            "key_achievements": project.get("achievements") or project.get("key_achievements") or [],
             "url": project.get("url", "")
         })
     
@@ -362,8 +362,8 @@ def enrich_resume_data(raw_data: dict, original_text: str) -> dict:
             "end_date": exp.get("end_date", "Present"),
             "duration_months": calculate_duration_months(exp.get("start_date", ""), exp.get("end_date", "")),
             "description": exp.get("description", ""),
-            "key_responsibilities": exp.get("responsibilities", exp.get("key_responsibilities", [])),
-            "technologies_used": [normalize_skill(str(t)) for t in exp.get("technologies", exp.get("technologies_used", [])) if t]
+            "key_responsibilities": exp.get("responsibilities") or exp.get("key_responsibilities") or [],
+            "technologies_used": [normalize_skill(str(t)) for t in (exp.get("technologies") or exp.get("technologies_used") or []) if t]
         })
     
     # Transform education
@@ -373,12 +373,12 @@ def enrich_resume_data(raw_data: dict, original_text: str) -> dict:
         enriched["education"].append({
             "institution": edu.get("institution", ""),
             "degree": edu.get("degree", ""),
-            "field_of_study": edu.get("field", edu.get("field_of_study", "")),
+            "field_of_study": edu.get("field") or edu.get("field_of_study") or "",
             "start_date": edu.get("start_date", ""),
             "end_date": edu.get("end_date", ""),
-            "year": extract_year(edu.get("end_date", edu.get("year", ""))),
+            "year": extract_year(edu.get("end_date") or edu.get("year") or ""),
             "gpa": edu.get("gpa", ""),
-            "relevant_coursework": edu.get("coursework", edu.get("relevant_coursework", []))
+            "relevant_coursework": edu.get("coursework") or edu.get("relevant_coursework") or []
         })
     
     # Transform certifications
