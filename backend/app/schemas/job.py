@@ -1,12 +1,13 @@
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
 
 class JobBase(BaseModel):
-    title: str
-    description: str
-    company: str
-    location: Optional[str] = "Remote"
+    model_config = ConfigDict(extra='forbid')
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(..., min_length=1)
+    company: str = Field(..., min_length=1, max_length=100)
+    location: Optional[str] = Field("Remote", max_length=100)
 
 class JobCreate(JobBase):
     pass

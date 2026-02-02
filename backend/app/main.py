@@ -2,6 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.api_v1.api import api_router
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from app.core.limiter import limiter
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -9,6 +13,10 @@ app = FastAPI(
     description="API for Parsing Resumes, Analyzing Job Descriptions, and Matching Candidates.",
     version="1.0.0",
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # CORS Configuration
 origins = [

@@ -9,11 +9,15 @@ from app.core.config import settings
 from app.crud import crud_user
 from app.schemas.token import Token
 from app.schemas.user import UserCreate, User
+from app.core.limiter import limiter
+from fastapi import Request
 
 router = APIRouter()
 
 @router.post("/login", response_model=Token)
+@limiter.limit("5/minute")
 async def login_access_token(
+    request: Request,
     db: AsyncSession = Depends(deps.get_db),
     form_data: OAuth2PasswordRequestForm = Depends()
 ) -> Any:
@@ -31,8 +35,10 @@ async def login_access_token(
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/register", response_model=User)
+@limiter.limit("5/minute")
 async def register_user(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.get_db),
     user_in: UserCreate,
 ) -> Any:
