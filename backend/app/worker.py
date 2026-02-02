@@ -473,11 +473,20 @@ async def parse_resume_async(resume_id: str, file_path: str):
         except Exception as db_err:
              print(f"WORKER CRITICAL: Check failed to update status to FAILED: {db_err}")
 
+
 @celery_app.task(ack_late=True)
 def parse_resume_task(resume_id: str, file_path: str):
     import asyncio
     try:
-        asyncio.run(parse_resume_async(resume_id, file_path))
+        # Create a new event loop for this task to avoid conflicts
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(parse_resume_async(resume_id, file_path))
+        finally:
+            # Clean up the loop
+            loop.close()
     except Exception as e:
         logger.exception(f"WORKER FATAL LOOP ERROR for resume {resume_id}: {e}")
         raise  # Re-raise so Celery can handle retries/monitoring
+
