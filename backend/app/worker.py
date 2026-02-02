@@ -2,6 +2,7 @@ import fitz  # PyMuPDF
 import json
 import os
 import re
+import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.core.celery_app import celery_app
@@ -11,6 +12,9 @@ from app.models.user import User  # Essential for SQLAlchemy relationship resolu
 from app.core.config import settings
 from groq import Groq
 import asyncio
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 # Synchronous wrapper for database update because Celery runs in a separate thread/process
 # Ideally we use async with Celery but for simplicity in this setup we might need a sync DB session adapter
@@ -28,6 +32,9 @@ async def update_resume_status(resume_id: str, status: ResumeStatus, parsed_data
             if error:
                 resume.error_message = error
             await session.commit()
+        else:
+            logger.error(f"Resume not found for resume_id={resume_id}")
+            raise ValueError(f"Resume not found for resume_id={resume_id}")
 
 def extract_text_from_pdf(file_path: str) -> str:
     text = ""
@@ -424,7 +431,8 @@ Each key should be an object or array as appropriate.
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
-        response_format={"type": "json_object"}
+        response_format={"type": "json_object"},
+        timeout=60.0  # 60 second timeout to prevent worker hanging
     )
     
     raw_data = json.loads(completion.choices[0].message.content)
@@ -471,4 +479,5 @@ def parse_resume_task(resume_id: str, file_path: str):
     try:
         asyncio.run(parse_resume_async(resume_id, file_path))
     except Exception as e:
-        print(f"WORKER FATAL LOOP ERROR: {e}")
+        logger.exception(f"WORKER FATAL LOOP ERROR for resume {resume_id}: {e}")
+        raise  # Re-raise so Celery can handle retries/monitoring
