@@ -35,6 +35,8 @@ function App() {
     setToken(null);
   };
 
+  console.log("App Rendering. Token:", !!token, "ActiveTab:", activeTab);
+
   if (!token) {
     return <Auth onLogin={(newToken) => setToken(newToken)} />;
   }

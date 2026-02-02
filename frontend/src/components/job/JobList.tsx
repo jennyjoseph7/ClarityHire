@@ -39,7 +39,9 @@ const JobList = ({ refresh }: { refresh: boolean }) => {
     };
 
     useEffect(() => {
+        console.log("JobList Effect Triggered. Refresh:", refresh);
         fetchData();
+        return () => console.log("JobList Cleanup/Unmount");
     }, [refresh]);
 
     if (loading) return (

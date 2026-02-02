@@ -52,14 +52,10 @@ async def upload_resume(
         await db.refresh(resume)
         
         # Trigger Celery Task (Pass absolute path for safety)
-        print(f"DEBUG: Dispatching Resume {resume.id} to Celery via {file_path}")
         try:
-            task = parse_resume_task.delay(str(resume.id), file_path)
-            print(f"DEBUG: Dispatch SUCCESS! Task ID: {task.id}")
+            parse_resume_task.delay(str(resume.id), file_path)
         except Exception as celery_err:
             print(f"CELERY TASK DISPATCH FAILED: {celery_err}")
-            import traceback
-            traceback.print_exc()
         
         # Return a dict to avoid serialization issues with SQLAlchemy objects
         return {
@@ -83,6 +79,8 @@ async def get_my_resumes(
     result = await db.execute(select(Resume).where(Resume.user_id == current_user.id).order_by(desc(Resume.id)))
     return result.scalars().all()
 
+from app.models.user import User  # Ensure User is loaded
+
 @router.get("/mine/latest")
 async def get_my_latest_resume(
     db: AsyncSession = Depends(deps.get_db),
@@ -96,8 +94,18 @@ async def get_my_latest_resume(
     )
     resume = result.scalars().first()
     if not resume:
+        # Fallback: Check if there is a PENDING/PARSING one?
+        # For now, just return empty ID so frontend shows upload
         return {"id": None}
-    return resume
+    
+    return {
+        "id": str(resume.id),
+        "status": resume.status,
+        "original_filename": resume.original_filename,
+        "parsed_json": resume.parsed_json,
+        "created_at": resume.created_at,
+        "updated_at": resume.parsed_at
+    }
 
 @router.get("/{resume_id}")
 async def get_resume_status(
