@@ -404,27 +404,113 @@ def enrich_resume_data(raw_data: dict, original_text: str) -> dict:
     return enriched
 
 
-# ====== STAGE 1: Simplified LLM Extraction ======
+# ====== LLM-BASED PARSING (Complete Extraction) ======
 def parse_with_llm(text: str) -> dict:
-    """Stage 1: Extract raw data with simplified LLM prompt"""
+    """Use LLM to extract complete structured data from resume"""
     client = Groq(api_key=settings.GROQ_API_KEY)
     
-    prompt = f"""Extract ALL information from this resume and return valid JSON.
+    prompt = f"""You are an expert Resume Parser. Extract ALL information from this resume and return ONLY valid JSON.
 
-Extract:
-- contact: name, email, phone, linkedin, location
-- summary: brief professional summary if mentioned
-- skills: Every technology, framework, tool, methodology mentioned
-- projects: title, description, technologies used, duration
-- experience: company, role, dates, responsibilities, technologies
-- education: institution, degree, field, year
-- certifications: name, issuer, date
+CRITICAL: Extract the COMPLETE detailed structure below. Do NOT simplify or skip fields.
+
+Return this EXACT JSON structure:
+{{
+    "name": "full name",
+    "email": "email address",
+    "phone": "phone number",
+    "linkedin": "linkedin url",
+    "location": "location",
+    "summary": "brief professional summary",
+    
+    "skills": [
+        {{
+            "skill": "canonical skill name (e.g., React not React.js)",
+            "evidence": ["project:ProjectName", "work:CompanyName", "certification:CertName"],
+            "months_experience": 6,
+            "proficiency": "beginner|intermediate|advanced"
+        }}
+    ],
+    
+    "projects": [
+        {{
+            "title": "project title",
+            "description": "what the project does",
+            "technologies": ["React", "Node.js"],
+            "duration": "timeframe or duration",
+            "key_achievements": ["achievement 1"],
+            "url": "github or live url if mentioned"
+        }}
+    ],
+    
+    "experience": [
+        {{
+            "company": "company name",
+            "role": "job title",  
+            "type": "full-time|internship|contract",
+            "start_date": "MMM YYYY",
+            "end_date": "MMM YYYY or Present",
+            "duration_months": 6,
+            "description": "role description",
+            "key_responsibilities": ["responsibility 1"],
+            "technologies_used": ["Python", "AWS"]
+        }}
+    ],
+    
+    "education": [
+        {{
+            "institution": "university name",
+            "degree": "degree name",
+            "field_of_study": "major/field",
+            "start_date": "YYYY",
+            "end_date": "YYYY",
+            "year": 2025,
+            "gpa": "GPA if mentioned",
+            "relevant_coursework": ["course names"]
+        }}
+    ],
+    
+    "certifications": [
+        {{
+            "name": "certification name",
+            "issuer": "issuing organization",
+            "date": "MMM YYYY",
+            "technologies": ["related skills"]
+        }}
+    ],
+    
+    "additional_info": {{
+        "total_experience_months": 12,
+        "experience_level": "fresher|junior|mid|senior",
+        "strongest_skills": ["top 5 skills by evidence"],
+        "volunteering": ["volunteer work"],
+        "languages": ["languages spoken"]
+    }}
+}}
+
+EXTRACTION RULES:
+1. **Skills**: Extract EVERY technology/tool mentioned. For each skill:
+   - Link to WHERE it was used (be specific: "project:MindWell" not just "project")
+   - Estimate months_experience from job durations or default 3-6 for projects
+   - Set proficiency: "advanced" if 12+ months AND multiple uses, "intermediate" if 6+ months OR 2+ uses, else "beginner"
+
+2. **Projects**: Extract title, description, ALL technologies used, timeframe
+
+3. **Experience**: 
+   - Calculate duration_months from dates (e.g., "Jan 2024" to "Jun 2024" = 6 months)
+   - Infer type: "internship" if role/company contains "intern" or "virtual", else "full-time"
+   - Extract ALL technologies mentioned in job description
+
+4. **Calculate additional_info**:
+   - total_experience_months: Sum ALL work experience months
+   - experience_level: "fresher" if <12 months + mostly internships, "junior" if 12-36, "mid" if 36-60, "senior" if 60+
+   - strongest_skills: Top 5 skills with most evidence + highest months_experience
+
+5. **Normalize skill names**: "React.js"→"React", "JS"→"JavaScript", "ML"→"Machine Learning"
 
 Resume Text:
 {text[:20000]}
 
-Return JSON with these keys: contact, summary, skills, projects, experience, education, certifications
-Each key should be an object or array as appropriate.
+Return ONLY valid JSON matching the structure above. Be thorough and detailed!
 """
     
     completion = client.chat.completions.create(
@@ -435,10 +521,7 @@ Each key should be an object or array as appropriate.
         timeout=60.0  # 60 second timeout to prevent worker hanging
     )
     
-    raw_data = json.loads(completion.choices[0].message.content)
-    
-    # STAGE 2: Enrich with evidence and structure
-    return enrich_resume_data(raw_data, text)
+    return json.loads(completion.choices[0].message.content)
 
 
 async def parse_resume_async(resume_id: str, file_path: str):
