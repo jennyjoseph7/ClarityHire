@@ -7,12 +7,19 @@ const ResumeUpload = () => {
     const [uploading, setUploading] = useState(false);
     const [status, setStatus] = useState<any>(null);
 
-    // Fetch latest resume on mount
+    // Fetch latest resume on mount (unless user previously dismissed it)
     useEffect(() => {
         console.log("ResumeUpload MOUNTED");
         const fetchLatestResume = async () => {
             const token = localStorage.getItem('access_token');
             if (!token) return;
+
+            // Check if user previously dismissed the resume
+            const dismissed = localStorage.getItem('resume_dismissed');
+            if (dismissed === 'true') {
+                console.log("Resume was dismissed, skipping auto-fetch");
+                return;
+            }
 
             try {
                 const response = await axios.get('http://localhost:8000/api/v1/resumes/mine/latest', {
@@ -85,6 +92,8 @@ const ResumeUpload = () => {
                 },
             });
             setStatus(response.data);
+            // Clear the dismissed flag since user uploaded a new resume
+            localStorage.removeItem('resume_dismissed');
             alert('Upload successful! Neural parsing initiated.');
         } catch (error) {
             console.error('Error uploading resume:', error);
@@ -137,7 +146,12 @@ const ResumeUpload = () => {
                                 <p className="text-emerald-500/70 text-xs uppercase tracking-widest font-semibold">{status.original_filename}</p>
                             </div>
                             <button
-                                onClick={() => { setStatus(null); setFile(null); }}
+                                onClick={() => {
+                                    setStatus(null);
+                                    setFile(null);
+                                    // Set flag to prevent auto-fetch on remount
+                                    localStorage.setItem('resume_dismissed', 'true');
+                                }}
                                 className="text-xs text-zinc-500 hover:text-white font-bold uppercase tracking-widest transition-colors"
                             >
                                 Reset
